@@ -23,7 +23,7 @@ char outputBuffer[OUTPUT_BUFFER_SIZE];
 int outputBufferPosition = 0;
 
 // サフィックス配列（検索対象の接尾辞を格納）
-char* suffixArray[MAX_TEXT_LENGTH];
+char* *suffixArray;
 int suffixArraySize = 0;
 
 // クエリ文字列の配列
@@ -34,8 +34,8 @@ int P_Len[MAX_QUERY_COUNT];
 
 // 先頭文字チェック用の配列（インデックス化して検索高速化）
 typedef struct {
-    int P_Exists;
-    int prefixFlagTable;
+    char P_Exists;
+    char prefixFlagTable;
     int WK;
 } PrefixData;
 PrefixData* data;
@@ -69,7 +69,7 @@ inline int prefixCompare(const void* key, const void* element) {
 }
 
 // 高速入力処理（改行区切りの文字列を取得）
-char* fastReadLine(char** cursor) {
+inline char* fastReadLine(char** cursor) {
     char* lineStart = *cursor;
     while (**cursor != '\n' && **cursor != '\0') {
         (*cursor)++;
@@ -187,6 +187,7 @@ int main() {
     }
 
     int PREFIX_INDEX_SIZE = fastPower(characterBase, maxPrefixLength);
+    suffixArray = new char* [PREFIX_INDEX_SIZE];
     data = new   PrefixData[PREFIX_INDEX_SIZE];
     memset(data, 0, sizeof(PrefixData) * PREFIX_INDEX_SIZE);
 
@@ -247,10 +248,12 @@ int main() {
                 //    i = i;
 
                 data[tempIndex].prefixFlagTable = 1;
+
+
+                if (data[tempIndex].P_Exists == 2)
+                    flag = 1;
             }
 
-            if (data[tempIndex].P_Exists == 2)
-                flag = 1;
             
             prefixIndices[j] = tempIndex;
         }
