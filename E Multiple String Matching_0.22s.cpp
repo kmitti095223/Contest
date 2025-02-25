@@ -1,3 +1,5 @@
+https://oki-aichat-ffko.azurewebsites.net/chat
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
