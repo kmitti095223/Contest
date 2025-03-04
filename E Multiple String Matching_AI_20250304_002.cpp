@@ -2,225 +2,250 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define INPUT_BUFFER_SIZE 12000000  // “ü—Íƒoƒbƒtƒ@‚ÌƒTƒCƒYi12MBj
-#define OUTPUT_BUFFER_SIZE 1200000  // o—Íƒoƒbƒtƒ@‚ÌƒTƒCƒYi1.2MBj
-#define MAX_T_LEN 1000000           // T‚ÌÅ‘å’·
-#define MAX_P_LEN 1000              // P‚ÌÅ‘å’·i”äŠr‚·‚éÅ‘å•¶š”j
-#define MAX_Q 10000                 // ƒNƒGƒŠ‚ÌÅ‘å”
-#define MAX_INDEX_SIZE 16777216     // ”z—ñ‚ÌÅ‘åƒCƒ“ƒfƒbƒNƒXƒTƒCƒYi256~256~256j
+#define INPUT_BUFFER_SIZE 12000000  // å…¥åŠ›ãƒãƒƒãƒ•ã‚¡ã®ã‚µã‚¤ã‚ºï¼ˆ12MBï¼‰
+#define OUTPUT_BUFFER_SIZE 1200000  // å‡ºåŠ›ãƒãƒƒãƒ•ã‚¡ã®ã‚µã‚¤ã‚ºï¼ˆ1.2MBï¼‰
+#define MAX_T_LEN 1000000           // Tã®æœ€å¤§é•·
+#define MAX_P_LEN 1000              // Pã®æœ€å¤§é•·ï¼ˆæ¯”è¼ƒã™ã‚‹æœ€å¤§æ–‡å­—æ•°ï¼‰
+#define MAX_Q 10000                 // ã‚¯ã‚¨ãƒªã®æœ€å¤§æ•°
+#define MAX_INDEX_SIZE 16777216     // é…åˆ—ã®æœ€å¤§ã‚¤ãƒ³ãƒ‡ãƒƒã‚¯ã‚¹ã‚µã‚¤ã‚ºï¼ˆ256Ã—256Ã—256ï¼‰
 
-// ƒTƒtƒBƒbƒNƒX”z—ñ—p‚Ì”äŠrŠÖ”iÅ‘åMAX_P_LEN‚Ü‚Å”äŠrj
-int compareSuffix(const void *a, const void *b) {
-    const char *suffixA = *(const char **)a;
-    const char *suffixB = *(const char **)b;
-    return strncmp(suffixA, suffixB, MAX_P_LEN);  // Å‘åMAX_P_LEN•¶š‚Ü‚Å”äŠr
+#ifdef WINDOWS_DEBUG
+#include <windows.h>
+LARGE_INTEGER frequency, startTime, endTime;
+int debugMatchCount = 0, debugBinarySearchCount = 0;
+#endif
+
+// ã‚µãƒ•ã‚£ãƒƒã‚¯ã‚¹é…åˆ—ç”¨ã®æ¯”è¼ƒé–¢æ•°ï¼ˆæœ€å¤§MAX_P_LENã¾ã§æ¯”è¼ƒï¼‰
+int compareSuffix(const void* a, const void* b) {
+    const char* suffixA = *(const char**)a;
+    const char* suffixB = *(const char**)b;
+    return strncmp(suffixA, suffixB, MAX_P_LEN);  // æœ€å¤§MAX_P_LENæ–‡å­—ã¾ã§æ¯”è¼ƒ
 }
 
-// bsearch—p‚ÌƒNƒGƒŠ”äŠrŠÖ”iƒNƒGƒŠ•¶š—ñ‚ÆƒTƒtƒBƒbƒNƒX‚ğ”äŠrA•K—v•¶š”‚¾‚¯”äŠrj
-int compareQuery(const void *a, const void *b) {
-    const char *query = (const char *)a;
-    const char *suffix = *(const char **)b;
-    return strncmp(query, suffix, strlen(query));  // ƒNƒGƒŠ•¶š—ñ‚Ì’·‚³‚¾‚¯”äŠr
+// bsearchç”¨ã®ã‚¯ã‚¨ãƒªæ¯”è¼ƒé–¢æ•°ï¼ˆã‚¯ã‚¨ãƒªæ–‡å­—åˆ—ã¨ã‚µãƒ•ã‚£ãƒƒã‚¯ã‚¹ã‚’æ¯”è¼ƒã€å¿…è¦æ–‡å­—æ•°ã ã‘æ¯”è¼ƒï¼‰
+int compareQuery(const void* a, const void* b) {
+    const char* query = (const char*)a;
+    const char* suffix = *(const char**)b;
+    return strncmp(query, suffix, strlen(query));  // ã‚¯ã‚¨ãƒªæ–‡å­—åˆ—ã®é•·ã•ã ã‘æ¯”è¼ƒ
 }
 
-// •¶š—ñ‚Ææ“ªnPrefixLength‚Ì•¶š”‚ğŠî‚ÉƒCƒ“ƒfƒbƒNƒX‚ğŒvZ‚·‚éŠÖ”
-int calculateIndex(const char *str, int nPrefixLength, int *charPresence, int baseSize) {
-    int index = 0;  // ƒCƒ“ƒfƒbƒNƒX‚Ì‰Šú’l
-    int base = 1;   // Œ»İ‚ÌŒ…‚ÌŠî”i1, baseSize, ...j
+// æ–‡å­—åˆ—ã¨å…ˆé ­nPrefixLengthã®æ–‡å­—æ•°ã‚’åŸºã«ã‚¤ãƒ³ãƒ‡ãƒƒã‚¯ã‚¹ã‚’è¨ˆç®—ã™ã‚‹é–¢æ•°
+int calculateIndex(const char* str, int nPrefixLength, int* charPresence, int baseSize) {
+    int index = 0;  // ã‚¤ãƒ³ãƒ‡ãƒƒã‚¯ã‚¹ã®åˆæœŸå€¤
+    int base = 1;   // ç¾åœ¨ã®æ¡ã®åŸºæ•°ï¼ˆ1, baseSize, ...ï¼‰
 
-    // nPrefixLength•¶š•ª‚ğˆ—
+    // nPrefixLengthæ–‡å­—åˆ†ã‚’å‡¦ç†
     for (int i = 0; i < nPrefixLength; ++i) {
         if (str[i] == '\0') {
-            break;  // •¶š—ñ‚ªI’[‚É“’B‚µ‚½ê‡
+            break;  // æ–‡å­—åˆ—ãŒçµ‚ç«¯ã«åˆ°é”ã—ãŸå ´åˆ
         }
 
-        // Œ»İ‚Ì•¶š‚Ì’licharPresence‚Åæ“¾j
+        // ç¾åœ¨ã®æ–‡å­—ã®å€¤ï¼ˆcharPresenceã§å–å¾—ï¼‰
         index += charPresence[str[i]] * base;
-        base *= baseSize;  // Šî”‚ğŠg’£
+        base *= baseSize;  // åŸºæ•°ã‚’æ‹¡å¼µ
     }
 
     return index;
 }
 
 int main() {
-    static char inputBuffer[INPUT_BUFFER_SIZE];   // “ü—Í‘S‘Ì‚ğŠi”[‚·‚éŒÅ’è’·ƒoƒbƒtƒ@
-    static char outputBuffer[OUTPUT_BUFFER_SIZE]; // o—Í“à—e‚ğŠi”[‚·‚éŒÅ’è’·ƒoƒbƒtƒ@
-    static char *P[MAX_Q];                        // ƒNƒGƒŠ•¶š—ñ‚ÌQÆ”z—ñiÃ“I•Ï”j
-    static int charPresence['z' + 1] = {0};       // Še•¶š‚ÌoŒ»ƒtƒ‰ƒO”z—ñ
-    char *T;                                      // å•¶š—ñT
-    char *ptr = inputBuffer;                      // “ü—Íƒoƒbƒtƒ@‘€ì—pƒ|ƒCƒ“ƒ^
-    char **suffixArray;                           // ƒTƒtƒBƒbƒNƒX”z—ñ
-    int Q, TLen, outputIndex = 0;                 // ƒNƒGƒŠ”AT‚Ì’·‚³Ao—Íƒoƒbƒtƒ@‚ÌˆÊ’u
-    int usedCharCount = 0;                        // g—p‚³‚ê‚Ä‚¢‚é•¶š‚Ì”
-    int nPrefixLength = 1;                        // g—p‚·‚éæ“ª•¶š”iÅIŒ‹‰Êj
-    int minPLength = MAX_P_LEN;                   // ƒNƒGƒŠ‚ÌÅ’Z’·‚Ì‰Šú’l
-    int *indexArray;                              // ƒCƒ“ƒfƒbƒNƒX‚²‚Æ‚Ì’l‚ğ‚Â”z—ñ
-    char *flagArray;                              // ƒCƒ“ƒfƒbƒNƒX‚ª‘¶İ‚·‚é‚©‚ğ‹L˜^‚·‚é”z—ñ
 
-    // •W€“ü—Í‚©‚ç‚·‚×‚Ä‚ğ“Ç‚İ‚Ş
-    size_t bytesRead = fread(inputBuffer, 1, INPUT_BUFFER_SIZE, stdin);
-    inputBuffer[bytesRead] = '\n';  // I’[‚É‰üs‚ğ’Ç‰Á
+#ifdef WINDOWS_DEBUG
+    QueryPerformanceFrequency(&frequency);
+    QueryPerformanceCounter(&startTime);
+#endif
 
-    // T‚ğæ“¾iÅ‰‚Ìsj
+    static char inputBuffer[INPUT_BUFFER_SIZE];   // å…¥åŠ›å…¨ä½“ã‚’æ ¼ç´ã™ã‚‹å›ºå®šé•·ãƒãƒƒãƒ•ã‚¡
+    static char outputBuffer[OUTPUT_BUFFER_SIZE]; // å‡ºåŠ›å†…å®¹ã‚’æ ¼ç´ã™ã‚‹å›ºå®šé•·ãƒãƒƒãƒ•ã‚¡
+    static char* P[MAX_Q];                        // ã‚¯ã‚¨ãƒªæ–‡å­—åˆ—ã®å‚ç…§é…åˆ—ï¼ˆé™çš„å¤‰æ•°ï¼‰
+    static int charPresence['z' + 1] = { 0 };       // å„æ–‡å­—ã®å‡ºç¾ãƒ•ãƒ©ã‚°é…åˆ—
+    char* T;                                      // ä¸»æ–‡å­—åˆ—T
+    char* ptr = inputBuffer;                      // å…¥åŠ›ãƒãƒƒãƒ•ã‚¡æ“ä½œç”¨ãƒã‚¤ãƒ³ã‚¿
+    char** suffixArray;                           // ã‚µãƒ•ã‚£ãƒƒã‚¯ã‚¹é…åˆ—
+    int Q, TLen, outputIndex = 0;                 // ã‚¯ã‚¨ãƒªæ•°ã€Tã®é•·ã•ã€å‡ºåŠ›ãƒãƒƒãƒ•ã‚¡ã®ä½ç½®
+    int usedCharCount = 0;                        // ä½¿ç”¨ã•ã‚Œã¦ã„ã‚‹æ–‡å­—ã®æ•°
+    int nPrefixLength = 1;                        // ä½¿ç”¨ã™ã‚‹å…ˆé ­æ–‡å­—æ•°ï¼ˆæœ€çµ‚çµæœï¼‰
+    int minPLength = MAX_P_LEN;                   // ã‚¯ã‚¨ãƒªã®æœ€çŸ­é•·ã®åˆæœŸå€¤
+    int* indexArray;                              // ã‚¤ãƒ³ãƒ‡ãƒƒã‚¯ã‚¹ã”ã¨ã®å€¤ã‚’æŒã¤é…åˆ—
+    char* flagArray;                              // ã‚¤ãƒ³ãƒ‡ãƒƒã‚¯ã‚¹ãŒå­˜åœ¨ã™ã‚‹ã‹ã‚’è¨˜éŒ²ã™ã‚‹é…åˆ—
+
+    // æ¨™æº–å…¥åŠ›ã‹ã‚‰ã™ã¹ã¦ã‚’èª­ã¿è¾¼ã‚€
+    size_t bytesRead = fread(inputBuffer, 1, INPUT_BUFFER_SIZE, stdin); // 17ms
+    inputBuffer[bytesRead] = '\n';  // çµ‚ç«¯ã«æ”¹è¡Œã‚’è¿½åŠ 
+
+    // Tã‚’å–å¾—ï¼ˆæœ€åˆã®è¡Œï¼‰
     T = ptr;
     while (*ptr != '\n') ++ptr;
-    *ptr++ = '\0';  // ‰üs‚ğNULL‚É’uŠ·‚µŸ‚Éi‚Ş
+    *ptr++ = '\0';  // æ”¹è¡Œã‚’NULLã«ç½®æ›ã—æ¬¡ã«é€²ã‚€
 
-    // Q‚ğæ“¾i2s–Ú‚Ì®”AƒNƒGƒŠ”j
+    // Qã‚’å–å¾—ï¼ˆ2è¡Œç›®ã®æ•´æ•°ã€ã‚¯ã‚¨ãƒªæ•°ï¼‰
     Q = atoi(ptr);
     while (*ptr != '\n') ++ptr;
-    *ptr++ = '\0';  // ‰üs‚ğNULL‚É’uŠ·‚µŸ‚Éi‚Ş
+    *ptr++ = '\0';  // æ”¹è¡Œã‚’NULLã«ç½®æ›ã—æ¬¡ã«é€²ã‚€
 
-    // ƒNƒGƒŠ‚ğæ“¾‚µ‚ÄQÆ”z—ñP‚ÉŠi”[
+    // ã‚¯ã‚¨ãƒªã‚’å–å¾—ã—ã¦å‚ç…§é…åˆ—Pã«æ ¼ç´
     for (int i = 0; i < Q; ++i) {
-        P[i] = ptr;  // ƒNƒGƒŠ‚ÌˆÊ’u‚ğP‚ÉŠi”[
+        P[i] = ptr;  // ã‚¯ã‚¨ãƒªã®ä½ç½®ã‚’Pã«æ ¼ç´
         int length = 0;
         while (*ptr != '\n') {
             ++ptr;
-            ++length;  // ƒNƒGƒŠ‚Ì’·‚³‚ğŒv‘ª
+            ++length;  // ã‚¯ã‚¨ãƒªã®é•·ã•ã‚’è¨ˆæ¸¬
         }
         if (length < minPLength) {
-            minPLength = length;  // Å’ZƒNƒGƒŠ’·‚ğXV
+            minPLength = length;  // æœ€çŸ­ã‚¯ã‚¨ãƒªé•·ã‚’æ›´æ–°
         }
-        *ptr++ = '\0';  // ‰üs‚ğNULL‚É’uŠ·‚µŸ‚Éi‚Ş
+        *ptr++ = '\0';  // æ”¹è¡Œã‚’NULLã«ç½®æ›ã—æ¬¡ã«é€²ã‚€
     }
 
-    // T‚ÆP‚ÉŠÜ‚Ü‚ê‚é•¶š‚ğƒ`ƒFƒbƒN‚µAcharPresence”z—ñ‚ÉƒZƒbƒg
+    // Tã¨Pã«å«ã¾ã‚Œã‚‹æ–‡å­—ã‚’ãƒã‚§ãƒƒã‚¯ã—ã€charPresenceé…åˆ—ã«ã‚»ãƒƒãƒˆ
     for (int i = 0; T[i] != '\0'; ++i) {
-        charPresence[T[i]] = 1;  // T‚ÉŠÜ‚Ü‚ê‚é•¶š‚ğƒZƒbƒg
+        charPresence[T[i]] = 1;  // Tã«å«ã¾ã‚Œã‚‹æ–‡å­—ã‚’ã‚»ãƒƒãƒˆ
     }
     for (int i = 0; i < Q; ++i) {
         for (int j = 0; P[i][j] != '\0'; ++j) {
-            charPresence[P[i][j]] = 1;  // P‚ÉŠÜ‚Ü‚ê‚é•¶š‚ğƒZƒbƒg
+            charPresence[P[i][j]] = 1;  // Pã«å«ã¾ã‚Œã‚‹æ–‡å­—ã‚’ã‚»ãƒƒãƒˆ
         }
     }
 
-    // T‚ÆP‚ÉŠÜ‚Ü‚ê‚é•¶š‚ğ”’l‚É•ÏŠ·‚·‚éƒe[ƒuƒ‹‚ğ\’z
-    int value = 1;  // ”’l‰»ŠJn’li= g—pÏ‚İ•¶š‚ÌƒJƒEƒ“ƒg + 1j
-    for (int i = 0; i <= 'z'; ++i) {  // 'z'‚Ì•¶šƒR[ƒh‚Ü‚Åƒ‹[ƒv
+    // Tã¨Pã«å«ã¾ã‚Œã‚‹æ–‡å­—ã‚’æ•°å€¤ã«å¤‰æ›ã™ã‚‹ãƒ†ãƒ¼ãƒ–ãƒ«ã‚’æ§‹ç¯‰
+    int value = 1;  // æ•°å€¤åŒ–é–‹å§‹å€¤ï¼ˆ= ä½¿ç”¨æ¸ˆã¿æ–‡å­—ã®ã‚«ã‚¦ãƒ³ãƒˆ + 1ï¼‰
+    for (int i = 0; i <= 'z'; ++i) {  // 'z'ã®æ–‡å­—ã‚³ãƒ¼ãƒ‰ã¾ã§ãƒ«ãƒ¼ãƒ—
         if (charPresence[i] == 1) {
-            charPresence[i] = value++;  // 1‚ªƒZƒbƒg‚³‚ê‚Ä‚¢‚é—v‘f‚É”Ô†‚ğŠ„‚èU‚é
-            ++usedCharCount;  // g—p‚³‚ê‚½•¶š‚ğƒJƒEƒ“ƒg
+            charPresence[i] = value++;  // 1ãŒã‚»ãƒƒãƒˆã•ã‚Œã¦ã„ã‚‹è¦ç´ ã«ç•ªå·ã‚’å‰²ã‚ŠæŒ¯ã‚‹
+            ++usedCharCount;  // ä½¿ç”¨ã•ã‚ŒãŸæ–‡å­—ã‚’ã‚«ã‚¦ãƒ³ãƒˆ
         }
     }
 
-    // Šî”‚ğŒvZ
+    // åŸºæ•°ã‚’è¨ˆç®—
     int baseSize = usedCharCount + 1;
 
-    // æ“ªn•¶š‚ğ‰½•¶š‚É‚·‚é‚©Œˆ’è‚·‚é
-    int possiblePatterns = baseSize;  // g—p‚³‚ê‚Ä‚¢‚é•¶ší—Ş + 0i‚È‚µj
-    nPrefixLength = 1;                // ‰Šú’lFæ“ª1•¶š
+    // å…ˆé ­næ–‡å­—ã‚’ä½•æ–‡å­—ã«ã™ã‚‹ã‹æ±ºå®šã™ã‚‹
+    int possiblePatterns = baseSize;  // ä½¿ç”¨ã•ã‚Œã¦ã„ã‚‹æ–‡å­—ç¨®é¡ + 0ï¼ˆãªã—ï¼‰
+    nPrefixLength = 1;                // åˆæœŸå€¤ï¼šå…ˆé ­1æ–‡å­—
     while (possiblePatterns <= MAX_INDEX_SIZE) {
-        possiblePatterns *= baseSize;  // ƒpƒ^[ƒ“”‚ğŠg’£
+        possiblePatterns *= baseSize;  // ãƒ‘ã‚¿ãƒ¼ãƒ³æ•°ã‚’æ‹¡å¼µ
         if (possiblePatterns > MAX_INDEX_SIZE) break;
-        nPrefixLength++;  // æ“ª•¶š”‚ğ‘‚â‚·
+        nPrefixLength++;  // å…ˆé ­æ–‡å­—æ•°ã‚’å¢—ã‚„ã™
     }
 
-    // minPLength‚ª24‚æ‚è‘å‚«‚¢ê‡‚Ì“Á•Êˆ—
+    // minPLengthãŒ24ã‚ˆã‚Šå¤§ãã„å ´åˆã®ç‰¹åˆ¥å‡¦ç†
     if (minPLength > 24) {
-        // ‡@ baseSize‚ğ-1‚·‚é‚ªAbaseSize‚ª1ˆÈ‰º‚É‚È‚ç‚È‚¢‚æ‚¤‚É‚·‚é
+        // â‘  baseSizeã‚’-1ã™ã‚‹ãŒã€baseSizeãŒ1ä»¥ä¸‹ã«ãªã‚‰ãªã„ã‚ˆã†ã«ã™ã‚‹
         if (baseSize > 1) {
             baseSize -= 1;
         }
 
-        // ‡A charPresence‚Ì’l‚ªusedCharCount‚Æˆê’v‚µ‚Ä‚¢‚éê‡A0‚É•ÏX
+        // â‘¡ charPresenceã®å€¤ãŒusedCharCountã¨ä¸€è‡´ã—ã¦ã„ã‚‹å ´åˆã€0ã«å¤‰æ›´
         for (int i = 0; i <= 'z'; ++i) {
             if (charPresence[i] == usedCharCount) {
                 charPresence[i] = 0;
             }
         }
 
-        // ‡B nPrefixLength‚ğ19‚Éİ’è‚·‚é
+        // â‘¢ nPrefixLengthã‚’19ã«è¨­å®šã™ã‚‹
         nPrefixLength = 19;
     }
 
-    // ƒCƒ“ƒfƒbƒNƒX‚Ì”z—ñ‚ğì¬
-    int totalIndexes = 1;  // ƒCƒ“ƒfƒbƒNƒX”z—ñ‚Ì‘—v‘f”
+    // ã‚¤ãƒ³ãƒ‡ãƒƒã‚¯ã‚¹ã®é…åˆ—ã‚’ä½œæˆ
+    int totalIndexes = 1;  // ã‚¤ãƒ³ãƒ‡ãƒƒã‚¯ã‚¹é…åˆ—ã®ç·è¦ç´ æ•°
     for (int i = 0; i < nPrefixLength; ++i) {
         totalIndexes *= baseSize;
     }
-    indexArray = (int *)calloc(totalIndexes, sizeof(int));  // ‚·‚×‚Ä0‚Å‰Šú‰»
-    flagArray = (char *)calloc(totalIndexes, sizeof(char)); // V‚½‚Èƒtƒ‰ƒO”z—ñi‚·‚×‚Ä0‚Å‰Šú‰»j
+    indexArray = (int*)calloc(totalIndexes, sizeof(int));  // ã™ã¹ã¦0ã§åˆæœŸåŒ–
+    flagArray = (char*)calloc(totalIndexes, sizeof(char)); // æ–°ãŸãªãƒ•ãƒ©ã‚°é…åˆ—ï¼ˆã™ã¹ã¦0ã§åˆæœŸåŒ–ï¼‰
 
-    // P‚Ì•¶š—ñ‚ğ‚à‚Æ‚ÉƒCƒ“ƒfƒbƒNƒX‚ğŒvZ‚µAindexArray‚É’l‚ğİ’è
+    // Pã®æ–‡å­—åˆ—ã‚’ã‚‚ã¨ã«ã‚¤ãƒ³ãƒ‡ãƒƒã‚¯ã‚¹ã‚’è¨ˆç®—ã—ã€indexArrayã«å€¤ã‚’è¨­å®š
     for (int i = 0; i < Q; ++i) {
         int index = calculateIndex(P[i], nPrefixLength, charPresence, baseSize);
         if (strlen(P[i]) <= nPrefixLength) {
-            if (indexArray[index] < 2) indexArray[index] = 1;  // P‚Ì’·‚³‚ª”äŠr‚·‚é•¶š”ˆÈ‰º
-        } else {
-            indexArray[index] = 2;  // P‚Ì’·‚³‚ª”äŠr‚·‚é•¶š”‚æ‚è‘å‚«‚¢
+            if (indexArray[index] < 2) indexArray[index] = 1;  // Pã®é•·ã•ãŒæ¯”è¼ƒã™ã‚‹æ–‡å­—æ•°ä»¥ä¸‹
+        }
+        else {
+            indexArray[index] = 2;  // Pã®é•·ã•ãŒæ¯”è¼ƒã™ã‚‹æ–‡å­—æ•°ã‚ˆã‚Šå¤§ãã„
         }
     }
 
-    // T‚Ì’·‚³‚ğ‘ª’è
+    // Tã®é•·ã•ã‚’æ¸¬å®š
     TLen = strlen(T);
 
-    // ƒTƒtƒBƒbƒNƒX”z—ñ‚ğ\’z
-    suffixArray = (char **)malloc(TLen * sizeof(char *));  // T‚Ì•¶š—ñ’·‚Åƒƒ‚ƒŠŠm•Û
-    int suffixCount = 0;  // ÀÛ‚É’Ç‰Á‚³‚ê‚½ƒTƒtƒBƒbƒNƒX‚Ì”
-    char *previousSuffix = NULL;  // ’¼‘O‚ÌƒTƒtƒBƒbƒNƒX•¶š—ñ‚Ö‚Ìƒ|ƒCƒ“ƒ^
+    // ã‚µãƒ•ã‚£ãƒƒã‚¯ã‚¹é…åˆ—ã‚’æ§‹ç¯‰
+    suffixArray = (char**)malloc(TLen * sizeof(char*));  // Tã®æ–‡å­—åˆ—é•·ã§ãƒ¡ãƒ¢ãƒªç¢ºä¿
+    int suffixCount = 0;  // å®Ÿéš›ã«è¿½åŠ ã•ã‚ŒãŸã‚µãƒ•ã‚£ãƒƒã‚¯ã‚¹ã®æ•°
+    char* previousSuffix = NULL;  // ç›´å‰ã®ã‚µãƒ•ã‚£ãƒƒã‚¯ã‚¹æ–‡å­—åˆ—ã¸ã®ãƒã‚¤ãƒ³ã‚¿
 
-    for (int i = 0; i <= TLen - minPLength; ++i) {  // T‚Ì’·‚³‚©‚çÅ’ZP‚Ì’·‚³‚ğˆø‚¢‚½”ÍˆÍ‚Åƒ‹[ƒv
-        // T‚Ì•”•ª•¶š—ñ‚ª1‚Â‘O‚Æˆê’v‚µ‚Ä‚¢‚éê‡‚ÍƒXƒLƒbƒv
+    for (int i = 0; i <= TLen - minPLength; ++i) {  // Tã®é•·ã•ã‹ã‚‰æœ€çŸ­Pã®é•·ã•ã‚’å¼•ã„ãŸç¯„å›²ã§ãƒ«ãƒ¼ãƒ—
+        // Tã®éƒ¨åˆ†æ–‡å­—åˆ—ãŒ1ã¤å‰ã¨ä¸€è‡´ã—ã¦ã„ã‚‹å ´åˆã¯ã‚¹ã‚­ãƒƒãƒ—
         if (previousSuffix != NULL &&
             strncmp(previousSuffix, &T[i], MAX_P_LEN) == 0) {
-            continue;  // d•¡‚µ‚Ä‚¢‚éê‡‚ÍƒXƒLƒbƒv
+            continue;  // é‡è¤‡ã—ã¦ã„ã‚‹å ´åˆã¯ã‚¹ã‚­ãƒƒãƒ—
         }
 
-        int valid = 0;  // ƒCƒ“ƒfƒbƒNƒX‚ª—LŒø‚©‚ğ”»’è
-        int index = 0;  // —İÏ“I‚ÉƒCƒ“ƒfƒbƒNƒX‚ğŒvZiÅ‰‚Í0j
+        int valid = 0;  // ã‚¤ãƒ³ãƒ‡ãƒƒã‚¯ã‚¹ãŒæœ‰åŠ¹ã‹ã‚’åˆ¤å®š
+        int index = 0;  // ç´¯ç©çš„ã«ã‚¤ãƒ³ãƒ‡ãƒƒã‚¯ã‚¹ã‚’è¨ˆç®—ï¼ˆæœ€åˆã¯0ï¼‰
         int base = 1;
 
-        // 1`nPrefixLength‚Ìƒ‹[ƒv
-        for (int j = 0; j < nPrefixLength; ++j) {
+        // 1ï½nPrefixLengthã®ãƒ«ãƒ¼ãƒ—
+        for (int j = 0; j < nPrefixLength; ++j) {// ã“ã“ã‹ã‚‰ä¸‹ 60ms
             if (T[i + j] == '\0') break;
 
-            index += charPresence[T[i + j]] * base;
+            index += charPresence[T[i + j]] * base; // 15ms
             base *= baseSize;
 
-            // minPLength >= nPrefixLength‚Ìê‡‚ÍÅŒã‚Ìƒ‹[ƒv‚Ìˆ—‚Ì‚İÀs
+            // minPLength >= nPrefixLengthã®å ´åˆã¯æœ€å¾Œã®ãƒ«ãƒ¼ãƒ—ã®å‡¦ç†ã®ã¿å®Ÿè¡Œ
             if (minPLength >= nPrefixLength && j < nPrefixLength - 1) continue;
 
-            // ƒCƒ“ƒfƒbƒNƒX‚ÉŠî‚Ã‚­ˆ—‚Ì‡˜‚ğC³
+            // ã‚¤ãƒ³ãƒ‡ãƒƒã‚¯ã‚¹ã«åŸºã¥ãå‡¦ç†ã®é †åºã‚’ä¿®æ­£
             if (indexArray[index] == 2) {
                 flagArray[index] = 1;
                 valid = 1;
-            } else if (indexArray[index] == 1) {
+            }
+            else if (indexArray[index] == 1) {
                 flagArray[index] = 1;
             }
         }
 
         if (valid) {
-            // ƒTƒtƒBƒbƒNƒX”z—ñ‚É’Ç‰Á
-            suffixArray[suffixCount++] = &T[i];
+            // ã‚µãƒ•ã‚£ãƒƒã‚¯ã‚¹é…åˆ—ã«è¿½åŠ 
+            suffixArray[suffixCount++] = &T[i]; // 10ms
             previousSuffix = &T[i];
         }
     }
 
-    // ƒTƒtƒBƒbƒNƒX”z—ñ‚ğƒ\[ƒgi«‘‡AÅ‘åMAX_P_LEN‚Ü‚Å”äŠrj
-    qsort(suffixArray, suffixCount, sizeof(char *), compareSuffix);
+    // ã‚µãƒ•ã‚£ãƒƒã‚¯ã‚¹é…åˆ—ã‚’ã‚½ãƒ¼ãƒˆï¼ˆè¾æ›¸é †ã€æœ€å¤§MAX_P_LENã¾ã§æ¯”è¼ƒï¼‰
+    qsort(suffixArray, suffixCount, sizeof(char*), compareSuffix); // 5ï½10ms
 
-    // ƒNƒGƒŠ‚ğˆ—‚µ‚Äo—Íƒoƒbƒtƒ@‚ÉŒ‹‰Ê‚ğŠi”[
+    // ã‚¯ã‚¨ãƒªã‚’å‡¦ç†ã—ã¦å‡ºåŠ›ãƒãƒƒãƒ•ã‚¡ã«çµæœã‚’æ ¼ç´
     for (int i = 0; i < Q; ++i) {
-        int index = calculateIndex(P[i], nPrefixLength, charPresence, baseSize);
-        if (flagArray[index] == 1) {
+        int index = calculateIndex(P[i], nPrefixLength, charPresence, baseSize); // ã»ã¼0ms
+
+        if (flagArray[index] == 1) { // 20ms
             if (strlen(P[i]) <= nPrefixLength) {
                 outputBuffer[outputIndex++] = '1';
-            } else {
-                if (bsearch(P[i], suffixArray, suffixCount, sizeof(char *), compareQuery)) {
+            }
+            else {
+                if (bsearch(P[i], suffixArray, suffixCount, sizeof(char*), compareQuery)) {
                     outputBuffer[outputIndex++] = '1';
-                } else {
+                }
+                else {
                     outputBuffer[outputIndex++] = '0';
                 }
             }
-        } else {
+        }
+        else {
             outputBuffer[outputIndex++] = '0';
         }
         outputBuffer[outputIndex++] = '\n';
     }
 
-    // Œ‹‰Ê‚ğ•W€o—Í‚É1‰ñ‚Å‘‚«o‚·
-    fwrite(outputBuffer, 1, outputIndex, stdout);
+    // çµæœã‚’æ¨™æº–å‡ºåŠ›ã«1å›ã§æ›¸ãå‡ºã™
+     fwrite(outputBuffer, 1, outputIndex, stdout); // 30ï½40ms
 
+
+#ifdef WINDOWS_DEBUG
+    QueryPerformanceCounter(&endTime);
+    printf("Execution Time: %dms\n", (int)((double)(endTime.QuadPart - startTime.QuadPart) * 1000.0 / frequency.QuadPart));
+    printf("DebugMatchCount=%d  DebugBinarySearchCount=%d\n", debugMatchCount, debugBinarySearchCount);
+    while (1) getchar();
+#endif
     return 0;
 }
