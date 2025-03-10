@@ -3,330 +3,294 @@
 #include <string.h>
 #include <cmath>
 
+#define INPUT_BUFFER_SIZE 12000000  // 入力バッファのサイズ（12MB）
+#define OUTPUT_BUFFER_SIZE 1200000  // 出力バッファのサイズ（1.2MB）
+#define MAX_T_LEN 1000000           // Tの最大長
+#define MAX_P_LEN 1000              // Pの最大長（比較する最大文字数）
+#define MAX_Q 10000                 // クエリの最大数
+#define MAX_INDEX_SIZE 16777216     // 配列の最大インデックスサイズ（256×256×256）
+
 #ifdef WINDOWS_DEBUG
 #include <windows.h>
 LARGE_INTEGER frequency, startTime, endTime;
 int debugMatchCount = 0, debugBinarySearchCount = 0;
 #endif
 
-#define MAX_TEXT_LENGTH 1000000
-#define MAX_PATTERN_LENGTH 1001
-#define MAX_QUERY_COUNT 10000
-#define INPUT_BUFFER_SIZE 20000000
-#define OUTPUT_BUFFER_SIZE 100000
-
-// 入力バッファ（全データを一括読み込み）
-char inputBuffer[INPUT_BUFFER_SIZE];
-
-// 出力バッファ（高速出力用）
-char outputBuffer[OUTPUT_BUFFER_SIZE];
-int outputBufferPosition = 0;
-
-// サフィックス配列（検索対象の接尾辞を格納）
-char* *suffixArray;
-int suffixArraySize = 0;
-
-// クエリ文字列の配列
-char* P[MAX_QUERY_COUNT];
-
-int P2[MAX_QUERY_COUNT];
-int P_Len[MAX_QUERY_COUNT];
-
-// 先頭文字チェック用の配列（インデックス化して検索高速化）
-typedef struct {
-    char P_Exists;
-    char prefixFlagTable;
-    int WK;
-} PrefixData;
-PrefixData* data;
-
-// 文字インデックス計算用のパラメータ
-int characterBase = -1; // 文字を数値化する基数
-int maxPrefixLength = -1; // 最大チェック長
-
-// 文字列の長さを最大5文字までカウントする関数
-inline int countCharacters(const char* str) {
-    int count = 0;
-    while (count <= maxPrefixLength && str[count] != '\0') {
-        count++;
-    }
-    return count;
+// サフィックス配列用の比較関数（最大MAX_P_LENまで比較）
+int compareSuffix(const void* a, const void* b) {
+    const char* suffixA = *(const char**)a;
+    const char* suffixB = *(const char**)b;
+    return strncmp(suffixA, suffixB, MAX_P_LEN);  // 最大MAX_P_LEN文字まで比較
 }
 
-// 文字のマッピングテーブル
-int characterMap[256] = { 0 };
-
-// サフィックス比較関数（先頭1000文字まで比較）
-inline int compareSuffixes(const void* a, const void* b) {
-    return strncmp(*(const char**)a, *(const char**)b, 1000);
+// bsearch用のクエリ比較関数（クエリ文字列とサフィックスを比較、必要文字数だけ比較）
+int compareQuery(const void* a, const void* b) {
+    const char* query = (const char*)a;
+    const char* suffix = *(const char**)b;
+    return strncmp(query, suffix, strlen(query));  // クエリ文字列の長さだけ比較
 }
 
-// 二分探索用の比較関数（前方一致）
-int COMP_LEN;
-inline int prefixCompare(const void* key, const void* element) {
-    return strncmp((const char*)key, *(const char**)element, COMP_LEN);
-    //return strncmp((const char*)key, *(const char**)element, strlen((const char*)key));
-}
 
-// 高速入力処理（改行区切りの文字列を取得）
-inline char* fastReadLine(char** cursor) {
-    char* lineStart = *cursor;
-    while (**cursor != '\n' && **cursor != '\0') {
-        (*cursor)++;
-    }
-    if (**cursor == '\n') {
-        **cursor = '\0';
-        (*cursor)++;
-    }
-    return lineStart;
-}
+// 文字列と先頭nPrefixLengthの文字数を基にインデックスを計算する関数
+int calculateIndex(const char* str, int nPrefixLength, int* charPresence, int bit_per_char) {
+    int index = 0;  // インデックスの初期値
+    
+    index = charPresence[str[0]];
 
-// 文字列のインデックスを計算する関数（先頭4文字を数値化）
-inline int computePrefixIndex(const char* str) {
-    int index = 0;
-    int length = countCharacters(str);
-    for (int i = 0; i < length && i < maxPrefixLength; i++) {
-        index = index * characterBase + characterMap[str[i]];
+    int i;
+    for (i = 1; i < nPrefixLength; ++i) {
+        if (str[i] == '\0') {
+            break;  // 文字列が終端に到達した場合
+        }
+
+        // 現在の文字の値（charPresenceで取得）
+        index = index << bit_per_char;  // 基数を拡張
+        index += charPresence[str[i]] ;
     }
+    //for (; i < nPrefixLength; ++i) {       
+    //    index = index << bit_per_char;  // 基数を拡張
+    //}
+
+
     return index;
 }
 
-
-int fastPower(int base, int exponent) {
-    int result = 1;
-    while (exponent > 0) {
-        if (exponent % 2 == 1) { // 奇数なら掛ける
-            result *= base;
-        }
-        base *= base; // 底を2乗
-        exponent /= 2; // 指数を半減
-    }
-    return result;
-}
-
 int main() {
+
 #ifdef WINDOWS_DEBUG
     QueryPerformanceFrequency(&frequency);
     QueryPerformanceCounter(&startTime);
 #endif
 
-    // 入力データを一括読み込み
-    fread(inputBuffer, 1, INPUT_BUFFER_SIZE, stdin);
-    char* cursor = inputBuffer;
+    static char inputBuffer[INPUT_BUFFER_SIZE];   // 入力全体を格納する固定長バッファ
+    static char outputBuffer[OUTPUT_BUFFER_SIZE]; // 出力内容を格納する固定長バッファ
+    static char* P[MAX_Q];                        // クエリ文字列の参照配列（静的変数）
+    static int charPresence['z' + 1] = { 0 };       // 各文字の出現フラグ配列
+    char* T;                                      // 主文字列T
+    char* ptr = inputBuffer;                      // 入力バッファ操作用ポインタ
+    char** suffixArray;                           // サフィックス配列
+    int Q, TLen, outputIndex = 0;                 // クエリ数、Tの長さ、出力バッファの位置
+    int usedCharCount = 0;                        // 使用されている文字の数
+    int nPrefixLength = 1;                        // 使用する先頭文字数（最終結果）
+    int minPLength = MAX_P_LEN;                   // クエリの最短長の初期値
+    int* indexArray;                              // インデックスごとの値を持つ配列
+    char* flagArray;                              // インデックスが存在するかを記録する配列
 
-    // クエリの先頭文字チェック用
-    char characterPresence['z' + 1] = { 0 };
+    // 標準入力からすべてを読み込む
+    size_t bytesRead = fread(inputBuffer, 1, INPUT_BUFFER_SIZE, stdin);
+    inputBuffer[bytesRead] = '\n';  // 終端に改行を追加
 
-    while (1) {
-        if (*cursor == '\n')
-            break;
-        characterPresence[*cursor] = 1;
-        cursor++;
-    }
-    cursor++;
-    while (1) {
-        if (*cursor == '\n')
-            break;
-        cursor++;
-    }
-    cursor++;
-    while (1) {
-        if (*cursor == 0)
-            break;
-        characterPresence[*cursor] = 1;
-        cursor++;
-    }
+    // Tを取得（最初の行）
+    T = ptr;
+    while (*ptr != '\n') ++ptr;
+    *ptr++ = '\0';  // 改行をNULLに置換し次に進む
 
-    cursor = inputBuffer;
+    // Qを取得（2行目の整数、クエリ数）
+    Q = atoi(ptr);
+    while (*ptr != '\n') ++ptr;
+    *ptr++ = '\0';  // 改行をNULLに置換し次に進む
 
-    // テキストデータを取得
-    char* T = fastReadLine(&cursor);
-    int Q = atoi(fastReadLine(&cursor));
-
-    int len_min = 10000;
-
-    for (int i = 0; i < Q; i++) {
-        P[i] = fastReadLine(&cursor);
-        //    characterPresence[*P[i]] = 1;
-
-        P_Len[i] = strlen(P[i]);
-        if (P_Len[i] < len_min)
-            len_min = P_Len[i];
-
+    // クエリを取得して参照配列Pに格納
+    for (int i = 0; i < Q; ++i) {
+        P[i] = ptr;  // クエリの位置をPに格納
+        int length = 0;
+        while (*ptr != '\n') {
+            ++ptr;
+            ++length;  // クエリの長さを計測
+        }
+        if (length < minPLength) {
+            minPLength = length;  // 最短クエリ長を更新
+        }
+        *ptr++ = '\0';  // 改行をNULLに置換し次に進む
     }
 
-    // 文字の種類数をカウントし、マッピングテーブルを作成
-    int uniqueCharacterCount = 0;
-    for (int i = '0'; i <= 'z'; i++) {
-        if (characterPresence[i]) {
-            uniqueCharacterCount++;
-            characterMap[i] = uniqueCharacterCount;
+    // TとPに含まれる文字をチェックし、charPresence配列にセット
+    for (int i = 0; T[i] != '\0'; ++i) {
+        charPresence[T[i]] = 1;  // Tに含まれる文字をセット
+    }
+    for (int i = 0; i < Q; ++i) {
+        for (int j = 0; P[i][j] != '\0'; ++j) {
+            charPresence[P[i][j]] = 1;  // Pに含まれる文字をセット
         }
     }
 
-    // 文字の種類数が少ない場合、基数を変更
-    characterBase = uniqueCharacterCount + 1; // 文字を数値化する基数
-    maxPrefixLength = (int)(std::log(256 * 256 * 64) / std::log(characterBase));; // 最大チェック長
+    // TとPに含まれる文字を数値に変換するテーブルを構築
+    int value = 1;  // 数値化開始値（= 使用済み文字のカウント + 1）
+    for (int i = 0; i <= 'z'; ++i) {  // 'z'の文字コードまでループ
+        if (charPresence[i] == 1) {
+            charPresence[i] = value++;  // 1がセットされている要素に番号を割り振る
+            ++usedCharCount;  // 使用された文字をカウント
+        }
+    }
 
-    if (uniqueCharacterCount <= 2) {
+    int bit_per_char = 0;
 
-        if (len_min > maxPrefixLength) {
-            characterBase = 2;
-            //maxPrefixLength = 19; // 18973
-            maxPrefixLength = 20; // 9537
-            // maxPrefixLength = 21; // 4798
-            // maxPrefixLength = 22; // 2372
-            // maxPrefixLength = 24; // 612
-            // maxPrefixLength = 26; // 147
-            for (int i = '0'; i <= 'z'; i++) {
-                if (characterMap[i] == 2) {
-                    characterMap[i] = 0;
+    // 基数を計算
+
+
+
+    if (minPLength > 20) 
+        nPrefixLength = 20;
+
+    int baseSize;
+    if (usedCharCount <= 2)
+    {
+        baseSize = 2;
+        bit_per_char = 2;
+        
+        if (minPLength > 20) {
+            nPrefixLength = 20;
+            bit_per_char = 1;
+
+            for (int i = 0; i <= 'z'; ++i) {
+                if (charPresence[i] == usedCharCount) {
+                    charPresence[i] = 0;
                 }
             }
         }
     }
+    else
+    {
+        baseSize = usedCharCount + 1;
+        bit_per_char = ((usedCharCount + 1) <= 1) ? 1 : static_cast<int>(std::ceil(std::log2((usedCharCount + 1))));
+        nPrefixLength = 24 / bit_per_char;
 
-    int PREFIX_INDEX_SIZE = fastPower(characterBase, maxPrefixLength);
-    suffixArray = new char* [PREFIX_INDEX_SIZE];
-    data = new   PrefixData[PREFIX_INDEX_SIZE];
-    memset(data, 0, sizeof(PrefixData) * PREFIX_INDEX_SIZE);
+        bit_per_char = 6;
+        nPrefixLength = 3;
 
-    memset(P2, 0, sizeof(P2));
 
-    int* prefixIndices = new int[maxPrefixLength];
-
-    // クエリのプレフィックスをインデックス化
-    for (int i = 0; i < Q; i++) {
-        int index = computePrefixIndex(P[i]);
-        int length = (P_Len[i] >= maxPrefixLength ? maxPrefixLength + 1 : maxPrefixLength);
-        if (length > maxPrefixLength) {
-
-            data[index].P_Exists = 2;
-
-            if (data[index].WK == -1)
-                data[index].WK = i;
-            else
-                data[index].WK = -2;
-
-        }
-        else if (data[index].P_Exists == 0)
-            data[index].P_Exists = 1;
+        // 先頭n文字を何文字にするか決定する
+        // int possiblePatterns = baseSize;  // 使用されている文字種類 + 0（なし）
+        //nPrefixLength = 1;                // 初期値：先頭1文字
+        //while (possiblePatterns <= MAX_INDEX_SIZE) {
+        //    possiblePatterns *= baseSize;  // パターン数を拡張
+        //    if (possiblePatterns > MAX_INDEX_SIZE) break;
+        //    nPrefixLength++;  // 先頭文字数を増やす
+        //}
     }
 
-    int textLength = strlen(T);
+    // インデックスの配列を作成
+    int totalIndexes = (int) pow(2, bit_per_char*nPrefixLength);  // インデックス配列の総要素数
 
-    // サフィックス配列の作成（検索対象の接尾辞を収集）
-    for (int i = 0; i < textLength - len_min + 1; i++) {
+    indexArray = (int*)calloc(totalIndexes, sizeof(int));  // すべて0で初期化
+    flagArray = (char*)calloc(totalIndexes, sizeof(char)); // 新たなフラグ配列（すべて0で初期化）
 
-        if (uniqueCharacterCount <= 2)
-            if (i != 0)
-                if (strncmp(&T[i], &T[i - 1], 1000) == 0)
-                    continue;
-
-        char* currentSuffix = &T[i];
-
-        // 上でnew
-        // int *prefixIndices = new int[maxPrefixLength];
-
-        // 無くても大丈夫
-        // memset(prefixIndices, 0, sizeof(int)* maxPrefixLength);
-
-        int flag = 0;
-        int tempIndex = 0;
-
-        //if (strncmp(currentSuffix, "oo", 2) == 0)
-        //    i = i;
-
-        for (int j = 0; j < maxPrefixLength; j++) { // このforループが遅い
-            if (T[i + j] == 0)
-                break;
-
-            tempIndex = tempIndex * characterBase + characterMap[T[i + j]];
-            if (data[tempIndex].P_Exists) {
-
-                //if (tempIndex == 52)
-                //    i = i;
-
-                data[tempIndex].prefixFlagTable = 1;
-
-
-                if (data[tempIndex].P_Exists == 2)
-                    flag = 1;
-            }
-
-            
-            prefixIndices[j] = tempIndex;
-        }
-
-
-        if (flag) {
-            int IndexEx = prefixIndices[maxPrefixLength - 1];
-            if (data[IndexEx].WK >= 0) {
-                // printf(P[WK[prefixIndices[maxPrefixLength - 1]]]);
-
-                if (P2[data[IndexEx].WK] != 1) {
-
-                    if (strncmp(P[data[IndexEx].WK], currentSuffix, P_Len[data[IndexEx].WK]) == 0)
-                        P2[data[IndexEx].WK] = 1;
-                    else {
-                        P2[data[IndexEx].WK] = -1;
-                    }
-                }
-            }
-            else
-            {
-                if (data[IndexEx].WK == -2) {
-                    suffixArray[suffixArraySize++] = currentSuffix;
-#ifdef WINDOWS_DEBUG
-                    debugMatchCount++;
-#endif
-                }
-            }
-        }
-    }
-
-    // サフィックス配列をソート
-    qsort(suffixArray, suffixArraySize, sizeof(char*), compareSuffixes);
-
-    // クエリごとの検索処理
-    for (int i = 0; i < Q; i++) {
-        int index = computePrefixIndex(P[i]);
-
-        //if (strcmp(P[i], "iooi") == 0)
-        //    i = i;
-
-        if (P2[i] == 1)
-        {
-            outputBuffer[outputBufferPosition++] = '1';
-        }
-        else if (P2[i] == -1)
-        {
-            outputBuffer[outputBufferPosition++] = '0';
+    // Pの文字列をもとにインデックスを計算し、indexArrayに値を設定
+    for (int i = 0; i < Q; ++i) {
+        int index = calculateIndex(P[i], nPrefixLength, charPresence, bit_per_char);
+        if (strlen(P[i]) <= nPrefixLength) {
+            if (indexArray[index] < 2) indexArray[index] = 1;  // Pの長さが比較する文字数以下
         }
         else {
-            if (data[index].prefixFlagTable) {
-                int length = (P_Len[i] >= maxPrefixLength ? maxPrefixLength + 1 : maxPrefixLength);
-                if (length > maxPrefixLength) {
-#ifdef WINDOWS_DEBUG
-                    debugBinarySearchCount++;
-#endif
-                    COMP_LEN = P_Len[i];
-                    char** result = (char**)bsearch(P[i], suffixArray, suffixArraySize, sizeof(char*), prefixCompare);
-                    outputBuffer[outputBufferPosition++] = (result != NULL) ? '1' : '0';
-                }
-                else {
-                    outputBuffer[outputBufferPosition++] = '1';
-                }
+            indexArray[index] = 2;  // Pの長さが比較する文字数より大きい
+        }
+    }
+
+    // Tの長さを測定
+    TLen = strlen(T);
+
+    // サフィックス配列を構築
+    suffixArray = (char**)malloc(TLen * sizeof(char*));  // Tの文字列長でメモリ確保
+    int suffixCount = 0;  // 実際に追加されたサフィックスの数
+    char* previousSuffix = NULL;  // 直前のサフィックス文字列へのポインタ
+
+    int mask = (1U << (bit_per_char* (nPrefixLength -1))) - 1;
+    int start = ((minPLength-1) < (nPrefixLength - 1)) ? minPLength - 1 : nPrefixLength - 1;
+    
+    int prev_index = calculateIndex(T,nPrefixLength,charPresence,bit_per_char);
+    prev_index = prev_index >> bit_per_char;
+
+    int t_end = TLen - minPLength ;
+
+    int set_flag = 1;
+
+    for (int i = 0; i <= t_end; ++i) {  // Tの長さから最短Pの長さを引いた範囲でループ
+        // Tの部分文字列が1つ前と一致している場合はスキップ
+        if (previousSuffix != NULL &&
+            strncmp(previousSuffix, &T[i], MAX_P_LEN) == 0) {
+            continue;  // 重複している場合はスキップ
+        }
+
+        int valid = 0;  // インデックスが有効かを判定
+        int index = 0;  // 累積的にインデックスを計算（最初は0）
+
+        int counter = nPrefixLength;
+        if (counter >= (TLen - i + 1)) {
+            set_flag = 0;
+        }
+        if (counter >= (TLen - i)) {
+            counter = TLen - i;
+        } 
+
+        if (set_flag) {
+            index = prev_index & mask;
+            index = index << bit_per_char;
+            index += charPresence[T[i+ nPrefixLength -1]];
+        }
+        else {
+            // index = index >> bit_per_char;
+            index = prev_index;
+
+            int mask2 = (1U << (bit_per_char * counter )) - 1;
+            index = prev_index & mask2;
+
+            index = index;
+        }
+        prev_index = index;
+
+        for (int j = counter; j != start; --j) {
+
+            // インデックスに基づく処理の順序を修正
+            if (indexArray[index] == 2) {
+                flagArray[index] = 1;
+                valid = 1;
+            }
+            else if (indexArray[index] == 1) {
+                flagArray[index] = 1;
+            }
+
+            index = index >> bit_per_char;
+
+            // minPLength >= nPrefixLengthの場合は最後のループの処理のみ実行
+//            if (minPLength >= nPrefixLength && j < nPrefixLength - 1) continue;
+
+        }
+
+        if (valid) {
+            // サフィックス配列に追加
+            suffixArray[suffixCount++] = &T[i];
+            previousSuffix = &T[i];
+        }
+    }
+
+    // サフィックス配列をソート（辞書順、最大MAX_P_LENまで比較）
+    qsort(suffixArray, suffixCount, sizeof(char*), compareSuffix);
+
+    // クエリを処理して出力バッファに結果を格納
+    for (int i = 0; i < Q; ++i) {
+        int index = calculateIndex(P[i], nPrefixLength, charPresence, bit_per_char);
+        if (flagArray[index] == 1) {
+            if (strlen(P[i]) <= nPrefixLength) {
+                outputBuffer[outputIndex++] = '1';
             }
             else {
-                outputBuffer[outputBufferPosition++] = '0';
+                if (bsearch(P[i], suffixArray, suffixCount, sizeof(char*), compareQuery)) {
+                    outputBuffer[outputIndex++] = '1';
+                }
+                else {
+                    outputBuffer[outputIndex++] = '0';
+                }
             }
         }
-        outputBuffer[outputBufferPosition++] = '\n';
+        else {
+            outputBuffer[outputIndex++] = '0';
+        }
+        outputBuffer[outputIndex++] = '\n';
     }
-    
-    // 出力バッファを一括出力
-    fwrite(outputBuffer, 1, outputBufferPosition, stdout);
+
+    // 結果を標準出力に1回で書き出す
+    fwrite(outputBuffer, 1, outputIndex, stdout);
+
 
 #ifdef WINDOWS_DEBUG
     QueryPerformanceCounter(&endTime);
